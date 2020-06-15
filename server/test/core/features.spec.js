@@ -26,7 +26,7 @@ describe('features', () => {
 
     beforeEach(async () => {
       await Context.reset()
-      await Context.appsRepo.add({name: 'appA'}, {name: 'appB'})
+      await Context.appsService.add({name: 'appA'}, {name: 'appB'})
 
       listApps = Context.buildFn(features.ListApps)
     })
@@ -51,7 +51,7 @@ describe('features', () => {
 
     it('adds an app to the app list', async () => {
       await addApp({app: {name: 'appA'}})
-      const apps = await Context.appsRepo.list()
+      const apps = await Context.appsService.list()
 
       expect(apps).toEqual(arrayContaining([
         { id: 'appA', name: 'appA' }
@@ -59,7 +59,7 @@ describe('features', () => {
     })
 
     it('does not add an existing app', async () => {
-      await Context.appsRepo.add({ name: 'appA' })
+      await Context.appsService.add({ name: 'appA' })
 
       try {
         await addApp({app: {name: 'appA'}})
@@ -80,16 +80,27 @@ describe('features', () => {
     })
 
     it('removes an app', async () => {
-      await Context.appsRepo.add({name: 'appA'}, {name: 'appB'})
+      await Context.appsService.add({name: 'appA'}, {name: 'appB'})
 
       await removeApp({app: 'appA'})
-      const apps = await Context.appsRepo.list()
+      const apps = await Context.appsService.list()
 
       expect(apps).toEqual([{id: 'appB', name: 'appB'}])
     })
 
+    it('does not remove a non-existing app', async () => {
+      await Context.appsService.add({ name: 'appB' })
+
+      try {
+        await removeApp({app: 'appA'})
+        fail('Expected to fail')
+      } catch(error) {
+        expect(error).toBeInstanceOf(AppDoesNotExist)
+      }
+    })
+
     it('removes any existing reminders for the app being removed', async () => {
-      await Context.appsRepo.add({name: 'appA'}, {name: 'appB'})
+      await Context.appsService.add({name: 'appA'}, {name: 'appB'})
       await Context.remindersService.add({app: 'appA', user: 'somedude', message: 'random'})
 
       await removeApp({app: 'appA'})
@@ -99,7 +110,7 @@ describe('features', () => {
     })
 
     it('notifies that app has been removed', async () => {
-      await Context.appsRepo.add({name: 'appA'}, {name: 'appB'})
+      await Context.appsService.add({name: 'appA'}, {name: 'appB'})
       await removeApp({app: 'appA'})
 
       const notifications = Context.notifier.teamNotifications
@@ -113,7 +124,7 @@ describe('features', () => {
 
     beforeEach(async () => {
       await Context.reset()
-      await Context.appsRepo.add({name: 'appA'}, {name: 'appB'})
+      await Context.appsService.add({name: 'appA'}, {name: 'appB'})
       await Context.takeApp({ app: 'appA', user: 'jack' })
 
       showStatus = Context.buildFn(features.ShowStatus)
@@ -141,19 +152,19 @@ describe('features', () => {
 
     beforeEach(async () => {
       await Context.reset()
-      await Context.appsRepo.add({name: 'appA'}, {name: 'appB'})
+      await Context.appsService.add({name: 'appA'}, {name: 'appB'})
 
-      takeApp = Context.buildFn(features.TakeApp, {remindIn: 1})
+      takeApp = Context.buildFn(features.TakeApp)
     })
 
     it('allows a user to take an app', async () => {
-      await takeApp({app: 'appA', user: 'ivo' })
-      const holder = await Context.appsRepo.holder('appA')
+      await takeApp({app: 'appA', user: 'ivo'})
+      const holder = await Context.appsService.holder('appA')
       expect(holder).toEqual('ivo')
     })
 
     it('sets up a reminder', async () => {
-      await takeApp({app: 'appA', user: 'ivo' })
+      await takeApp({app: 'appA', user: 'ivo'})
       const expectedMessage = Context.messages.areYouDoneWith('appA')
       const reminder = await Context.remindersRepo.find('appA')
 
@@ -164,7 +175,7 @@ describe('features', () => {
     })
 
     it('notifies about the app being taken', async () => {
-      await takeApp({app: 'appA', user: 'ivo' })
+      await takeApp({app: 'appA', user: 'ivo'})
       const notifications = Context.notifier.teamNotifications
       expect(notifications.length).toEqual(1)
       expect(notifications[0].message).toMatch('ivo has taken `appA`')
@@ -172,7 +183,7 @@ describe('features', () => {
 
     it('when an app does not exist, fails and warns the app does not exist', async () => {
       try {
-        await takeApp({app: 'appZ', user: 'ivo' })
+        await takeApp({app: 'appZ', user: 'ivo'})
         fail('Expected to fail')
       } catch(error) {
         expect(error).toBeInstanceOf(AppDoesNotExist)
@@ -181,12 +192,25 @@ describe('features', () => {
 
     it('when an app is already taken, fails and warns the app is taken', async () => {
       try {
-        await takeApp({app: 'appA', user: 'jack' })
-        await takeApp({app: 'appA', user: 'ivo' })
+        await takeApp({app: 'appA', user: 'jack'})
+        await takeApp({app: 'appA', user: 'ivo'})
         fail('Expected to fail')
       } catch(error) {
         expect(error).toBeInstanceOf(AppIsTaken)
       }
+    })
+
+    describe('when supplying a custom time lease', () => {
+      it('only triggers notifications after the time lease expires', async () => {
+        await takeApp({app: 'appA', user: 'ivo', lease: 600000})
+        const expectedMessage = Context.messages.areYouDoneWith('appA')
+
+        jest.advanceTimersByTime(600000 - 20);
+        expect(Context.notifier.userNotifications).toBeEmpty()
+
+        jest.advanceTimersByTime(20);
+        expect(Context.notifier.userNotifications).toContainEqual({user: 'ivo', message: expectedMessage})
+      })
     })
   })
 
@@ -197,11 +221,11 @@ describe('features', () => {
 
     beforeEach(async () => {
       await Context.reset()
-      await Context.appsRepo.add({name: 'appA'}, {name: 'appB'})
+      await Context.appsService.add({name: 'appA'}, {name: 'appB'})
 
       returnApp = Context.buildFn(features.ReturnApp)
 
-      await Context.appsRepo.take(takenApp, expectedUser)
+      await Context.appsService.take(takenApp, expectedUser)
       await Context.remindersService.add({
         app: takenApp,
         user: expectedUser,
@@ -210,11 +234,11 @@ describe('features', () => {
     })
 
     it('allows a user to return a taken app', async () => {
-      const holder = await Context.appsRepo.holder(takenApp)
+      const holder = await Context.appsService.holder(takenApp)
       expect(holder).toEqual(expectedUser)
 
       await returnApp({app: takenApp, user: expectedUser})
-      const noholder = await Context.appsRepo.holder(takenApp)
+      const noholder = await Context.appsService.holder(takenApp)
       expect(noholder).toBeNull()
     })
 
